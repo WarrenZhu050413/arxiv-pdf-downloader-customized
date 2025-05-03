@@ -1,0 +1,500 @@
+# Implementation Plan for Code Reorganization
+
+## Phase 1: Create Directory Structure
+
+1. Create a `/utils` directory with subdirectories:
+   - `/utils/popup` - Popup-specific utilities
+   - `/utils/background` - Background-specific utilities  
+   - `/utils/common` - Shared utilities
+
+## Phase 2: Extract Shared Utilities
+
+1. Create the following common utility files:
+   - `/utils/common/storage_utils.js` - Storage operations
+   - `/utils/common/window_utils.js` - Window/popup handling
+   - `/utils/common/notification_utils.js` - Notifications
+   - `/utils/common/error_utils.js` - Error handling
+
+2. Implement the window_utils.js file:
+```javascript
+// window_utils.js
+export const popupManager = {
+  async open() {
+    try {
+      const currentWindow = await chrome.windows.getLastFocused();
+      if (currentWindow) {
+        await chrome.action.openPopup();
+        console.log("Popup open requested.");
+      } else {
+        console.error("Could not get the last focused window.");
+      }
+    } catch (error) {
+      console.error("Error opening popup:", error);
+    }
+  },
+
+  async close() {
+    console.log("Attempting to close popup");
+    
+    // Method 1: Send message to popup
+    chrome.runtime.sendMessage({ action: 'closePopup' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.log("No popup to receive message or error:", chrome.runtime.lastError);
+      } else {
+        console.log("Popup received close message:", response);
+      }
+    });
+    
+    // Method 2: Unfocus the popup window
+    try {
+      chrome.windows.getCurrent(windowInfo => {
+        if (windowInfo) {
+          chrome.windows.update(windowInfo.id, { focused: false });
+        }
+      });
+    } catch (e) {
+      console.error("Error trying to unfocus popup:", e);
+    }
+  },
+
+  async forceClose() {
+    console.log("Force closing popup");
+    
+    // Method 1: Send force close message to popup
+    chrome.runtime.sendMessage({ action: 'forceClosePopup' }, () => {
+      // Ignore errors since popup might already be closed
+    });
+    
+    // Method 2: Reset popup URL to force close
+    try {
+      chrome.action.setPopup({ popup: '' });
+      setTimeout(() => {
+        chrome.action.setPopup({ popup: 'popup.html' });
+      }, 100);
+    } catch (e) {
+      console.error("Error resetting popup URL:", e);
+    }
+    
+    // Method 3: Find and close popup windows
+    try {
+      chrome.windows.getAll({ populate: true }, (windows) => {
+        for (const window of windows) {
+          if (window.type === 'popup') {
+            chrome.windows.remove(window.id);
+          }
+        }
+      });
+    } catch (e) {
+      console.error("Error finding popup windows:", e);
+    }
+  }
+};
+```
+
+3. Implement the storage_utils.js file:
+```javascript
+// storage_utils.js
+export const stateManager = {
+  async getCustomTitleMode() {
+    const result = await chrome.storage.local.get(['customTitleData']);
+    return result.customTitleData && result.customTitleData.isCustomTitleFlow;
+  },
+  
+  async setCustomTitleMode(isActive, data = {}) {
+    if (isActive) {
+      await chrome.storage.local.set({ 
+        customTitleData: {
+          isCustomTitleFlow: true,
+          ...data
+        }
+      });
+    } else {
+      await chrome.storage.local.remove('customTitleData');
+    }
+    return isActive;
+  },
+
+  async getCustomTitleData() {
+    const result = await chrome.storage.local.get(['customTitleData']);
+    return result.customTitleData || null;
+  },
+
+  async getFolderPath() {
+    const result = await chrome.storage.sync.get(['driveFolderPath']);
+    return result.driveFolderPath || 'papers';
+  },
+
+  async saveFolderPath(path) {
+    await chrome.storage.sync.set({ driveFolderPath: path });
+    return path;
+  }
+};
+```
+
+4. Implement the notification_utils.js file:
+```javascript
+// notification_utils.js
+export function showNotification(title, message, type) {
+  chrome.notifications.create('', {
+    type: 'basic',
+    iconUrl: 'images/icon_128.png',
+    title: title,
+    message: message
+  }, (notificationId) => {
+    if (chrome.runtime.lastError) {
+      console.error(`Error showing notification: ${chrome.runtime.lastError.message}`);
+    } else {
+      console.log(`Notification ${type}: ${notificationId}`);
+    }
+  });
+}
+```
+
+5. Implement the error_utils.js file:
+```javascript
+// error_utils.js
+import { showNotification } from './notification_utils.js';
+
+export const errorHandler = {
+  handleChromeError(operation, callback) {
+    if (chrome.runtime.lastError) {
+      console.error(`Error during ${operation}:`, chrome.runtime.lastError);
+      showNotification('FAILURE', `Error: ${chrome.runtime.lastError.message || 'Unknown error'}`, 'failure');
+      return false;
+    }
+    if (callback) callback();
+    return true;
+  },
+
+  async tryCatch(operation, func, errorMessage) {
+    try {
+      return await func();
+    } catch (error) {
+      console.error(`Error during ${operation}:`, error);
+      showNotification('FAILURE', errorMessage || error.message || 'Unknown error', 'failure');
+      return null;
+    }
+  }
+};
+```
+
+## Phase 3: Modularize Command Handlers
+
+1. Create a new file `/utils/background/command_handlers.js`:
+```javascript
+// command_handlers.js
+import { stateManager } from '../common/storage_utils.js';
+import { popupManager } from '../common/window_utils.js';
+import { showNotification } from '../common/notification_utils.js';
+import { errorHandler } from '../common/error_utils.js';
+
+// Debounce settings
+const download_interval = 1000;
+let lastDownload = { url: '', time: 0 };
+
+// Handlers for each command
+export const commandHandlers = {
+  SavePaper: async function() {
+    return await errorHandler.tryCatch('SavePaper', async () => {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tabs || tabs.length === 0) {
+        throw new Error("No active tab found.");
+      }
+      
+      const tab = tabs[0];
+      const now = Date.now();
+      
+      // Debounce check
+      if (lastDownload.url === tab.url && now - lastDownload.time < download_interval) {
+        showNotification('INFO', `Skipping duplicate download request for URL: ${tab.url}`, 'info');
+        return;
+      }
+      lastDownload = { url: tab.url, time: now };
+      
+      // Get paper details and save
+      const urlResult = await getUrlAndName(tab);
+      if (!urlResult) {
+        showNotification('INFO', 'Current page is not a supported paper page.', 'info');
+        return;
+      }
+      
+      const [filepdf_url, title, identifier, idType] = urlResult;
+      if (!filepdf_url || !identifier) {
+        throw new Error("Could not determine PDF URL or identifier.");
+      }
+      
+      const save_filename = constructFilename(title, identifier, identifier, idType);
+      const fileInfo = { path: filepdf_url, name: save_filename };
+      showNotification('INFO', `Saving: ${fileInfo.name}`, 'info');
+      
+      const folderPath = await stateManager.getFolderPath();
+      await uploadToDrive(fileInfo, folderPath);
+    }, "Error saving paper");
+  },
+  
+  SavePaperWithCustomTitle: async function() {
+    return await errorHandler.tryCatch('SavePaperWithCustomTitle', async () => {
+      // Check if already in custom title mode
+      const isCustomMode = await stateManager.getCustomTitleMode();
+      
+      if (isCustomMode) {
+        // Exit custom title mode
+        await stateManager.setCustomTitleMode(false);
+        await popupManager.forceClose();
+        return;
+      }
+      
+      // First open popup for better UX
+      await popupManager.open();
+      
+      // Then load data in parallel
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tabs || tabs.length === 0) {
+        throw new Error("No active tab found.");
+      }
+      
+      const tab = tabs[0];
+      const now = Date.now();
+      
+      // Debounce check
+      if (lastDownload.url === tab.url && now - lastDownload.time < download_interval) {
+        showNotification('INFO', `Skipping duplicate download request for URL: ${tab.url}`, 'info');
+        return;
+      }
+      lastDownload = { url: tab.url, time: now };
+      
+      // Get paper details
+      const urlResult = await getUrlAndName(tab);
+      if (!urlResult) {
+        showNotification('INFO', 'Current page is not a supported paper page.', 'info');
+        popupManager.forceClose();
+        return;
+      }
+      
+      const [filepdf_url, title, identifier, idType] = urlResult;
+      if (!filepdf_url || !identifier) {
+        throw new Error("Could not determine PDF URL or identifier.");
+      }
+      
+      // Set the custom title data
+      await stateManager.setCustomTitleMode(true, {
+        pdfUrl: filepdf_url,
+        originalTitle: title,
+        identifier: identifier,
+        idType: idType
+      });
+    }, "Error initializing custom title mode");
+  },
+  
+  open_popup: async function() {
+    return await errorHandler.tryCatch('open_popup', async () => {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tabs || tabs.length === 0) {
+        throw new Error("No active tab found.");
+      }
+      
+      await popupManager.open();
+    }, "Error opening popup");
+  },
+  
+  close_popup: async function() {
+    return await errorHandler.tryCatch('close_popup', async () => {
+      await popupManager.forceClose();
+    }, "Error closing popup");
+  }
+};
+```
+
+## Phase 4: Update Existing Files
+
+1. Update background.js to use the modular approach:
+```javascript
+// Import modular utilities
+import { commandHandlers } from './utils/background/command_handlers.js';
+import { errorHandler } from './utils/common/error_utils.js';
+
+// Import handlers for site-specific operations
+import './background_handlers.js';
+
+// Listen for commands
+chrome.commands.onCommand.addListener(async (command) => {
+  console.log('Command received:', command);
+  
+  const handler = commandHandlers[command];
+  if (handler) {
+    await handler();
+  } else {
+    console.warn("Unrecognized command received:", command);
+  }
+});
+
+// Listen for messages from popup
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle different message types
+  if (message.action === 'uploadCustomTitle') {
+    handleCustomTitleUpload(message.data, sendResponse);
+    return true; // Indicate asynchronous response
+  }
+  
+  if (message.action === 'forceClosePopup') {
+    import('./utils/common/window_utils.js').then(module => {
+      module.popupManager.forceClose();
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+  
+  console.warn("Received unknown message action:", message.action);
+  return false;
+});
+
+// Handle custom title upload
+async function handleCustomTitleUpload(data, sendResponse) {
+  try {
+    const { customTitle, originalData } = data;
+    const { pdfUrl, identifier, idType } = originalData;
+    
+    if (!pdfUrl || !identifier || !customTitle) {
+      console.error("Invalid data received for custom upload:", data);
+      sendResponse({ success: false, message: 'Missing required data for custom save.' });
+      return;
+    }
+    
+    const { stateManager } = await import('./utils/common/storage_utils.js');
+    const folderPath = await stateManager.getFolderPath();
+    
+    const saveFilename = constructFilename(customTitle, identifier, identifier, idType);
+    const fileInfo = { path: pdfUrl, name: saveFilename };
+    
+    console.log(`Uploading custom title file '${saveFilename}' to path: '${folderPath}'`);
+    const uploadResult = await uploadToDrive(fileInfo, folderPath);
+    sendResponse(uploadResult);
+  } catch (error) {
+    console.error("Error handling custom title upload:", error);
+    sendResponse({ success: false, message: error.message || 'Unknown error during upload' });
+  }
+}
+
+console.log('Background script loaded with modular architecture.');
+```
+
+2. Update popup.js to use shared utilities:
+```javascript
+// Import shared utilities
+import { errorHandler } from './utils/common/error_utils.js';
+import { stateManager } from './utils/common/storage_utils.js';
+
+// --- Initialization & Event Listeners Setup ---
+document.addEventListener('DOMContentLoaded', () => {
+  // Enhanced force-close popup function using the shared approach
+  async function forceClosePopup() {
+    console.log('Force closing popup with multiple methods');
+    try {
+      // Method 1: Standard window.close()
+      window.close();
+      
+      // Method 2: Force document unload
+      document.body.innerHTML = '';
+      window.location.href = 'about:blank';
+      
+      // Method 3: Send message to background
+      chrome.runtime.sendMessage({ action: 'forceClosePopup' });
+      
+      // Method 4: Self-destruct via reload
+      setTimeout(() => {
+        if (window) {
+          try {
+            window.location.reload();
+          } catch (e) {
+            console.error('Failed final close attempt:', e);
+          }
+        }
+      }, 50);
+    } catch (e) {
+      console.error('Error force closing popup:', e);
+    }
+  }
+
+  // Enhanced keyboard shortcut detection
+  window.addEventListener('keydown', (event) => {
+    console.log('Keydown event detected:', event.key, event.code, 'Meta/Ctrl:', event.metaKey || event.ctrlKey, 'Shift:', event.shiftKey);
+    
+    // Check for Command+Shift+P (Mac) or Ctrl+Shift+P (Windows/Linux)
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && 
+        (event.code === 'KeyP' || event.key === 'P' || event.key === 'p')) {
+      console.log('Command+Shift+P detected, force closing popup...');
+      event.preventDefault();
+      event.stopPropagation();
+      forceClosePopup();
+    }
+  }, true);
+
+  // Listen for close messages
+  chrome.runtime.onMessage.addListener((message) => {
+    console.log('Message received in popup:', message);
+    if (message.action === 'closePopup' || message.action === 'forceClosePopup') {
+      console.log('Received close popup message, force closing popup window');
+      forceClosePopup();
+    }
+    return true;
+  });
+
+  // Check flow type (custom title vs settings)
+  initializePopupMode();
+});
+
+// Initialize popup based on the current mode
+async function initializePopupMode() {
+  try {
+    const customTitleData = await stateManager.getCustomTitleData();
+    
+    if (customTitleData && customTitleData.isCustomTitleFlow) {
+      // Setup for Custom Title Mode
+      console.log("Popup opened in custom title flow.", customTitleData);
+      settingsSection.style.display = 'none';
+      customTitleSection.style.display = 'block';
+      customTitleInput.value = customTitleData.originalTitle || '';
+      customTitleInput.focus();
+      customTitleInput.select();
+      attachCustomTitleListeners(customTitleData);
+    } else {
+      // Setup for Settings Mode
+      console.log("Popup opened in standard settings mode.");
+      customTitleSection.style.display = 'none';
+      settingsSection.style.display = 'block';
+      loadSettings();
+      attachSettingsListeners();
+    }
+  } catch (error) {
+    console.error("Error initializing popup mode:", error);
+    settingsSection.style.display = 'block';
+    loadSettings();
+    attachSettingsListeners();
+  }
+}
+
+// The rest of the existing functions with errorHandler integration...
+```
+
+## Phase 5: Update Manifest for Module Support
+
+1. Add module support to manifest.json:
+```json
+"background": {
+  "service_worker": "background.js",
+  "type": "module"
+},
+```
+
+2. Add import/export support to script tags in popup.html:
+```html
+<script src="popup_utils.js" type="module"></script>
+<script src="popup.js" type="module"></script>
+```
+
+## Phase 6: Testing and Finalization
+
+1. Test each feature thoroughly after modularization
+2. Verify keyboard shortcuts work as expected
+3. Test error handling across modules
+4. Document the new architecture in README.md 

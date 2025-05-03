@@ -1,0 +1,115 @@
+# Papers-to-GDrive Extension Code Structure and Features
+
+## Overview
+
+The Papers-to-GDrive extension is designed to download research papers to Google Drive. The extension supports keyboard shortcuts (Cmd+X for custom title, Cmd+Shift+P to close popup) and handles different paper sources (arXiv, ACM, etc.).
+
+## Key Files and Their Purposes
+
+1. **manifest.json**
+   - Extension configuration
+   - Defines permissions
+   - Registers keyboard shortcuts (Cmd+X, Cmd+Shift+P, etc.)
+
+2. **background.js**
+   - Service worker that runs in the background
+   - Handles keyboard shortcuts via chrome.commands.onCommand
+   - Manages file download and upload logic
+   - Coordinates with popup
+
+3. **background_utils.js**
+   - Contains utility functions for background.js
+   - Includes the GoogleDriveUploader class
+   - Handles PDF metadata extraction
+   - Manages popup window opening/closing
+
+4. **background_handlers.js**
+   - Contains handlers for different paper websites
+   - Each handler extracts site-specific metadata
+
+5. **popup.html**
+   - UI for the extension popup
+   - Contains settings and custom title sections
+
+6. **popup.js**
+   - Controls popup UI logic
+   - Handles toggling between settings/custom title modes
+   - Manages keyboard shortcuts within popup
+   - Communicates with background script
+
+7. **popup_utils.js**
+   - Utility functions for popup.js
+   - Manages UI updates and status messages
+
+## Current State Handling
+
+The extension uses several state management mechanisms:
+
+1. **Chrome Storage**
+   - `chrome.storage.local` for temporary data like custom title info
+   - `chrome.storage.sync` for persistent settings like folder paths
+
+2. **Global Variables**
+   - `lastDownload` for debouncing downloads
+   - `isPopupOpen` to track popup state
+
+3. **Message Passing**
+   - Background to popup for closing the popup
+   - Popup to background for custom title uploads
+
+## Keyboard Shortcut Implementation
+
+1. **Cmd+X** (SavePaperWithCustomTitle)
+   - Defined in manifest.json as "SavePaperWithCustomTitle"
+   - Handled in background.js
+   - Toggles custom title mode
+   - Opens/closes popup
+
+2. **Cmd+Shift+P** (open_popup/close_popup)
+   - Defined in manifest.json as "open_popup"
+   - Also handled by popup.js for closing
+   - First detects if popup is open, then toggles
+
+## Popup Closing Mechanism
+
+The popup closing mechanism is complex due to Chrome extension limitations:
+
+1. **From popup.js**
+   - Uses multiple methods to try closing the window
+   - window.close(), location changes, etc.
+   - Sends message to background if needed
+
+2. **From background.js**
+   - Sends message to popup
+   - Tries to unfocus/manipulate window
+   - Manipulates action popup settings
+
+## Current Issues
+
+1. **Command+Shift+P Zombie State**
+   - Popup partially closes but remains visible
+   - Subsequent keypresses don't work
+   - Need to implement more aggressive closing mechanism
+
+2. **Command+X Latency**
+   - Multiple async operations create delays
+   - Need to optimize and parallelize operations
+
+## Recommendations for Changes
+
+1. **Restructure popup closing**:
+   - Use more aggressive methods in popup.js
+   - Register Command+Shift+P in manifest.json
+   - Implement a forceful background close
+
+2. **Optimize latency**:
+   - Open popup immediately on Cmd+X
+   - Load data asynchronously
+   - Use Promise.all for parallel operations
+
+3. **Improve error handling**:
+   - Add more specific error messages
+   - Implement better recovery from failed states
+   - Add logging for debugging
+
+Remember to maintain the existing extension UX patterns and keep code clean and readable as per the current style. 

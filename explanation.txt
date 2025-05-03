@@ -1,0 +1,380 @@
+# State Machine Analysis of Current Implementation
+
+## Current State Machine
+
+Current States:
+1. Normal mode (no custom title mode active)
+2. Custom title mode active (popup showing custom title section)
+
+Transitions:
+- Command+X in Normal mode → Check storage → Set customTitleModeActive = true → Store customTitleData → openExtensionPopup()
+- Command+X in Custom title mode → Check storage → Remove customTitleData → Set customTitleModeActive = false → Attempt to close popup by modifying popup URL
+- Command+Shift+P in popup → window.close()
+
+## Issues Identified
+
+1. **Command+X Toggle Logic Issues:**
+   - We're checking customTitleData in storage, but not actually detecting if the popup is currently open
+   - We're not directly closing the popup, just removing the storage data
+   - Using chrome.action.getUserSettings() and chrome.action.setPopup() doesn't close an open popup
+   - The customTitleModeActive variable in background.js can get out of sync with the actual state
+
+2. **Popup Opening Delay:**
+   - The added storage check in openExtensionPopup() adds unnecessary delay
+   - We're doing an async storage check, then an async window check, then trying to open the popup
+   - We don't actually use the storage check result for anything in openExtensionPopup()
+
+3. **Command+Shift+P Not Working:**
+   - The event listener in popup.js looks correct, but may be failing
+   - The key property detection may be incorrect for browser implementation
+   - window.close() should work on extension popups, so this is puzzling
+   - Case sensitivity might be an issue ('p' vs 'P')
+
+4. **Error on Command+Shift+P Twice:**
+   - Error "Could not find an active browser window" suggests we're trying to open a popup when the browser window is not active
+   - This happens because after closing the popup with Command+Shift+P, trying to open it again with the same shortcut attempts to find the last focused window
+
+## Proper State Machine Design
+
+What we need:
+1. A reliable way to detect if the popup is already open
+2. Direct method to close the popup from the background script
+3. Simple toggle logic that doesn't rely on keeping state variables in sync
+4. Keyboard shortcut listener that reliably detects Command+Shift+P
+
+The extension architecture makes implementing this challenging because:
+- Background script can't directly detect if popup is open 
+- Background script can't directly close popup
+- Keyboard shortcuts configured in manifest can only trigger background script
+- Popup script only runs when popup is open
+
+We need to simplify our approach and avoid the current complexity. 
+
+# Latency and Window Closing Issues Analysis
+
+## Current Latency Issues with Command+X
+
+The current Command+X implementation has significant latency because:
+
+1. We're doing multiple asynchronous operations in sequence:
+   - Getting the storage data (chrome.storage.local.get)
+   - Querying for active tabs (chrome.tabs.query)
+   - Getting URL and name data (getUrlAndName)
+   - Setting storage data (chrome.storage.local.set)
+   - Opening the popup (openExtensionPopup)
+
+2. Each of these operations has its own latency, especially:
+   - Querying for tabs 
+   - Getting URL and name data (which can involve network requests)
+   - Chrome API calls for storage
+
+3. The Promise chain and async/await operations are causing a waterfall effect where each operation must wait for the previous one to complete.
+
+## Current Window Closing Issues
+
+Window closing issues (Command+X toggle and Command+Shift+P not working) are caused by:
+
+1. **Chrome Extension Popup Limitations:**
+   - Chrome extension popups are special windows that have restrictions
+   - `window.close()` has limited functionality in Chrome extensions
+   - The popup runs in a different context than the background script
+
+2. **Message Passing Problems:**
+   - The background script is sending a message, but the popup might not be receiving it
+   - There's no confirmation that the message was received
+
+3. **Event Listener Issues:**
+   - The keyboard event listener may not be capturing events correctly
+   - Event code property vs key property has inconsistencies
+
+## Step-by-Step Solutions
+
+### For Latency Issues:
+
+1. **Optimize the Command+X flow:**
+   - Eliminate unnecessary checks/delays in the storage operations
+   - Use parallel operations where possible with Promise.all()
+   - Simplify the toggle logic
+
+2. **Immediate Popup Response:**
+   - Show the popup immediately upon Command+X
+   - Load data asynchronously after popup is visible
+   - Use a loading indicator if needed
+
+3. **Cache URL Data:**
+   - Cache the tab URL data to avoid repeating expensive operations
+
+### For Window Closing Issues:
+
+1. **Fixing Command+X Toggle:**
+   - Use chrome.action.setPopup({ popup: '' }) before toggling
+   - Use a more direct approach to close popups
+   - Track popup state in a more reliable way
+
+2. **Fixing Command+Shift+P:**
+   - Use alternative methods to window.close()
+   - Modify the Chrome API approaches for popup management
+   - Implement the keyboard shortcut at the browser level instead of popup level
+
+## Implementation Plan
+
+1. First, fix the window.close() method in popup.js with the correct approach
+2. Simplify the Command+X toggle logic to reduce latency
+3. Implement proper popup closing mechanism
+4. Add cache/state tracking for faster response
+
+## Chrome Extension Popup Closing Solutions
+
+Based on research, here are the most reliable methods to close a Chrome extension popup:
+
+1. For popup.js (from inside the popup):
+   ```javascript
+   // Using alternative methods - Try multiple approaches
+   function closePopup() {
+     window.close();
+     setTimeout(() => {
+       if (window) {
+         window.open('', '_self').close();
+       }
+     }, 10);
+   }
+   ```
+
+2. From background script:
+   ```javascript
+   // Send a command to refresh the extension, which forces popup to close
+   chrome.runtime.reload();
+   
+   // Or remove focus from popup which causes it to close
+   chrome.windows.getCurrent(windowInfo => {
+     chrome.windows.update(windowInfo.id, { focused: false });
+   });
+   ``` 
+
+# Command+Shift+P Not Working After Second Press
+
+## Current Issue Analysis
+
+When Command+Shift+P is pressed for the first time, it appears to partially close the popup, but the popup doesn't fully close. Then a second press fails to close it, and we see the error: "Could not find an active browser window."
+
+This is happening because:
+
+1. **Chrome Extension Popup State Management**:
+   - The window.close() method in popup.js appears to be detaching the popup from Chrome's active window tracking
+   - The popup may be entering a "zombie" state where it's visually present but no longer properly tracked
+   - The error "Could not find an active browser window" suggests Chrome can't find the window to close it
+
+2. **Event Propagation Issues**:
+   - After the first Command+Shift+P, the key events may not be propagating correctly
+   - The popup window might be losing its connection to the DOM event system
+
+3. **Context Problem**:
+   - The popup window may be losing its JavaScript execution context after the first close attempt
+   - This would explain why the second key press isn't being processed properly
+
+## Solution Approach
+
+We need a more aggressive approach to closing the popup. Here's what to implement:
+
+1. **Multiple Window Closing Methods**:
+   - Try multiple methods in quick succession to ensure closure
+   - Use chrome.windows API directly if possible to force close
+   - Force document unload events
+
+2. **Background Script Control**:
+   - Move more control to the background script
+   - Make the popup.js script send a message to background.js to handle closure
+   - Have background.js forcibly close the popup window if necessary
+
+3. **Chrome Native Approach**:
+   - Register Command+Shift+P directly in manifest.json as a command
+   - Have the command directly call a background script function
+   - Close via backend rather than frontend
+
+## Implementation Details
+
+Here's a specific implementation plan:
+
+1. **Enhanced Popup Closing**:
+   ```javascript
+   function forceClosePopup() {
+     // Method 1: Standard close
+     window.close();
+     
+     // Method 2: Force document unload
+     document.body.innerHTML = '';
+     window.location.href = 'about:blank';
+     
+     // Method 3: Send message to background to force close
+     chrome.runtime.sendMessage({ action: 'forceClosePopup' });
+     
+     // Method 4: Self-destruct via reload
+     setTimeout(() => {
+       if (window) {
+         try {
+           window.location.reload();
+         } catch (e) {
+           console.error('Failed final close attempt:', e);
+         }
+       }
+     }, 50);
+   }
+   ```
+
+2. **Background Force Close**:
+   ```javascript
+   // In background.js
+   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+     if (message.action === 'forceClosePopup') {
+       // Force close the popup by manipulating action popup
+       chrome.action.setPopup({ popup: '' });
+       chrome.action.setPopup({ popup: 'popup.html' });
+       
+       // Try to get the window and force close it
+       if (sender.tab) {
+         chrome.windows.remove(sender.tab.windowId);
+       }
+     }
+   });
+   ```
+
+3. **Register Command+Shift+P in Manifest**:
+   ```json
+   "commands": {
+     "close_popup": {
+       "suggested_key": {
+         "default": "Ctrl+Shift+P",
+         "mac": "Command+Shift+P"
+       },
+       "description": "Close Extension Popup"
+     }
+   }
+   ```
+
+This multi-layered approach should ensure that Command+Shift+P consistently closes the popup even if pressed multiple times. 
+
+# Code Organization and Reuse Opportunities
+
+## Current Structure Issues
+
+The codebase has several areas where organization could be improved and code could be reused:
+
+1. **Popup Closing Logic Duplication**:
+   - Similar popup closing logic exists in both popup.js and background.js
+   - The `closePopup()` and `forceClosePopup()` functions contain duplicated approaches
+   - Multiple functions trying to achieve the same goal
+
+2. **Command Handling Structure**:
+   - The command listener in background.js has grown large with nested conditionals
+   - Each command logic is mixed together with error handling
+   - Common operations (like tab querying) are repeated
+
+3. **State Management Across Files**:
+   - Storage operations are scattered across files
+   - State tracking is done through a mix of storage and global variables
+   - No single source of truth for application state
+
+4. **Error Handling Inconsistency**:
+   - Error handling varies between functions
+   - Some places use try/catch, others check chrome.runtime.lastError
+   - Notification methods aren't standardized
+
+5. **Utility Organization**:
+   - Utility functions are split between background_utils.js and popup_utils.js
+   - Some functions could be shared but are duplicated
+
+## Recommended Improvements
+
+1. **Create a Shared Utils Module**:
+   ```
+   /utils
+     - popup_utils.js  (UI-specific utilities)
+     - storage_utils.js (Storage operations)
+     - window_utils.js  (Window/popup handling)
+     - notification_utils.js (Notifications)
+   ```
+
+2. **Modularize Command Handlers**:
+   ```javascript
+   // In a new file: command_handlers.js
+   const commandHandlers = {
+     SavePaper: async function(tab) {
+       // Handler logic
+     },
+     SavePaperWithCustomTitle: async function(tab) {
+       // Handler logic
+     },
+     open_popup: async function() {
+       // Handler logic
+     }
+   };
+   
+   // In background.js
+   chrome.commands.onCommand.addListener(async (command) => {
+     const handler = commandHandlers[command];
+     if (handler) {
+       try {
+         await handler();
+       } catch (error) {
+         console.error(`Error handling command ${command}:`, error);
+       }
+     }
+   });
+   ```
+
+3. **Create a State Management Module**:
+   ```javascript
+   // In a new file: state_manager.js
+   const stateManager = {
+     async getCustomTitleMode() {
+       const result = await chrome.storage.local.get(['customTitleData']);
+       return result.customTitleData && result.customTitleData.isCustomTitleFlow;
+     },
+     async setCustomTitleMode(isActive, data) {
+       if (isActive) {
+         await chrome.storage.local.set({ 
+           customTitleData: {
+             isCustomTitleFlow: true,
+             ...data
+           }
+         });
+       } else {
+         await chrome.storage.local.remove('customTitleData');
+       }
+     }
+   };
+   ```
+
+4. **Unified Popup Management**:
+   ```javascript
+   // In window_utils.js
+   const popupManager = {
+     open: async function() {
+       // Open logic
+     },
+     close: async function() {
+       // Combined close logic from both files
+     },
+     forceClose: async function() {
+       // Enhanced force close logic
+     }
+   };
+   ```
+
+5. **Consistent Error Handling**:
+   ```javascript
+   // In error_utils.js
+   const errorHandler = {
+     handleChromeError: function(operation, callback) {
+       if (chrome.runtime.lastError) {
+         console.error(`Error during ${operation}:`, chrome.runtime.lastError);
+         showNotification('FAILURE', `Error: ${chrome.runtime.lastError.message || 'Unknown error'}`, 'failure');
+         return false;
+       }
+       if (callback) callback();
+       return true;
+     }
+   };
+   ```
+
+These restructuring approaches would make the code more maintainable, easier to test, and reduce duplication. 

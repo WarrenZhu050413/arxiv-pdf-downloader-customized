@@ -1,0 +1,3 @@
+Always update popup.js and README.md's features section with the new changes. But make the messages brief and concise, similar to the style in the README and popup before.
+
+Whenever you write code, make it as clean and readable as possible. Organize long files into multiple files with clear names and purpose. Use the currently available files as a guide.

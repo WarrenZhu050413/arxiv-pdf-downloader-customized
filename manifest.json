@@ -35,7 +35,7 @@
           },
           "description": "Save current paper to Google Drive with custom title."
         },
-        "set_folder_path": {
+        "open_popup": {
           "suggested_key": {
              "default": "Ctrl+Shift+P",
              "mac": "Command+Shift+P"
