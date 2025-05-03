@@ -65,8 +65,8 @@ The extension uses several state management mechanisms:
    - Toggles custom title mode
    - Opens/closes popup
 
-2. **Cmd+Shift+P** (open_popup/close_popup)
-   - Defined in manifest.json as "open_popup"
+2. **Cmd+Shift+P** (maybe_open_popup/close_popup)
+   - Defined in manifest.json as "maybe_open_popup"
    - Also handled by popup.js for closing
    - First detects if popup is open, then toggles
 

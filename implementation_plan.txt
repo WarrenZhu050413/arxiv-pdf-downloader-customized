@@ -286,8 +286,8 @@ export const commandHandlers = {
     }, "Error initializing custom title mode");
   },
   
-  open_popup: async function() {
-    return await errorHandler.tryCatch('open_popup', async () => {
+  maybe_open_popup: async function() {
+    return await errorHandler.tryCatch('maybe_open_popup', async () => {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tabs || tabs.length === 0) {
         throw new Error("No active tab found.");

@@ -1,3 +1,140 @@
+# Papers-to-GDrive: Architecture & Code Logic Explanation
+
+## Overview
+Papers-to-GDrive is a Chrome extension that helps users save academic papers to Google Drive. It supports various paper repositories like arXiv, ACM, and Usenix. The extension works by detecting paper URLs, extracting metadata, and uploading PDFs to a specified Google Drive folder.
+
+## Architecture
+
+### Directory Structure
+The codebase follows a modular architecture:
+
+```
+papers-to-GDrive/
+├── background.js              # Main background service worker
+├── popup.html                 # Popup UI HTML
+├── popup.js                   # Popup UI controller (entry point)
+├── manifest.json              # Extension manifest
+├── utils/                     # Modular utilities
+│   ├── background/            # Background-specific utilities
+│   │   ├── command_handlers.js # Keyboard command handlers
+│   │   └── site_handlers.js   # Paper site pattern handlers
+│   ├── common/                # Shared utilities
+│   │   ├── drive_utils.js     # Google Drive API interaction
+│   │   ├── error_utils.js     # Error handling
+│   │   ├── file_utils.js      # File & title processing
+│   │   ├── notification_utils.js # Notifications & UI updates
+│   │   ├── storage_utils.js   # Chrome storage operations
+│   │   └── window_utils.js    # Window/popup management
+│   └── popup/                 # Popup-specific utilities
+│       └── popup_handlers.js  # Popup UI handlers
+└── images/                    # Extension icons
+```
+
+### Key Components
+
+1. **Background Script (background.js)**:
+   - Entry point for the extension's background service worker
+   - Handles keyboard shortcuts through commands API
+   - Routes messages between components
+   - Manages extension lifecycle
+
+2. **Popup UI (popup.js, popup.html)**:
+   - User interface for settings and custom title input
+   - Two main modes: Settings mode and Custom Title mode
+   - Handles keyboard shortcuts for popup control
+
+3. **Command Handlers (command_handlers.js)**:
+   - Processes keyboard commands (e.g., CMD+E, CMD+X, CMD+SHIFT+P)
+   - Implements paper saving logic
+   - Toggles custom title mode
+   - Controls popup opening/closing
+
+4. **Site Handlers (site_handlers.js)**:
+   - Contains pattern matching for supported paper sites
+   - Extracts PDF URLs, titles, and identifiers from various sites
+   - Implements specific logic for each supported repository
+
+5. **Common Utilities**:
+   - **drive_utils.js**: Google Drive API integration for uploading
+   - **error_utils.js**: Standardized error handling
+   - **file_utils.js**: File naming and title parsing
+   - **notification_utils.js**: Chrome notifications and UI status updates
+   - **storage_utils.js**: Chrome storage access (sync and local)
+   - **window_utils.js**: Chrome window/popup management
+
+## Core Flows
+
+### 1. Standard Paper Save Flow (CMD+E)
+1. User presses CMD+E on a paper page
+2. The background script receives the command
+3. The command handler queries the active tab
+4. Site handlers detect the paper type and extract metadata
+5. The PDF is uploaded to Google Drive in the configured folder
+6. Notifications show progress and results
+
+### 2. Custom Title Save Flow (CMD+X)
+1. User presses CMD+X on a paper page
+2. The background script receives the command
+3. If not in custom title mode:
+   a. Command handler opens the popup
+   b. Site handlers extract paper metadata
+   c. Custom title data is stored in local storage
+   d. Popup initializes in custom title mode
+4. If already in custom title mode:
+   a. Custom title mode is cleared
+   b. Popup is closed
+5. When the user enters a custom title and clicks save:
+   a. Popup sends the custom title to the background
+   b. Background saves the PDF with the custom title
+   c. Notifications show progress and results
+
+### 3. Popup Control Flow (CMD+SHIFT+P)
+1. User presses CMD+SHIFT+P
+2. If the popup is open, it's closed
+3. If the popup is closed, it opens in settings mode
+
+## Key Mechanisms
+
+### Paper URL Detection
+- Uses regex patterns to match paper repository URLs
+- Each repository has specific handler functions
+- Handlers extract paper ID, URL, and title information
+
+### Title Parsing
+- Extracts paper titles from HTML
+- Parses identifiers like arXiv IDs from titles
+- Sanitizes titles for safe filename use
+
+### Google Drive Integration
+- Uses Chrome Identity API for authentication
+- Creates folder hierarchies as needed
+- Uploads PDFs with descriptive filenames
+- Handles API errors and retries
+
+### Popup State Management
+- Tracks popup open/close state with debouncing
+- Toggles between settings and custom title modes
+- Uses multiple strategies to ensure reliable popup closing
+- Prevents zombie states with force-close mechanisms
+
+### Keyboard Shortcut Handling
+- CMD+E: Quick save paper
+- CMD+X: Toggle custom title mode
+- CMD+SHIFT+P: Toggle popup open/close
+- Uses event handling and debouncing to prevent conflicts
+
+## Error Handling
+- Standard error handling patterns across modules
+- Detailed logging for troubleshooting
+- User-friendly notifications for errors
+- Graceful fallbacks when components fail
+
+## Module Communication
+- Uses Chrome messaging API for inter-module communication
+- Clearly defined interfaces between components
+- Asynchronous patterns for responsive UI
+- State management via Chrome storage APIs
+
 # State Machine Analysis of Current Implementation
 
 ## Current State Machine
@@ -304,7 +441,7 @@ The codebase has several areas where organization could be improved and code cou
      SavePaperWithCustomTitle: async function(tab) {
        // Handler logic
      },
-     open_popup: async function() {
+     maybe_open_popup: async function() {
        // Handler logic
      }
    };

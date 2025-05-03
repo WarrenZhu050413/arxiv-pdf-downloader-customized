@@ -1,4 +1,5 @@
 // papers-to-GDrive/popup.js
+import { initializePopup, handleCommandShiftP } from './utils/popup/popup_handlers.js';
 
 // --- Global Constants & DOM References ---
 const MAX_HISTORY = 100;
@@ -137,117 +138,37 @@ function loadSettings() {
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Popup document loaded - setting up event listeners');
     
-    // Enhanced force-close popup function
-    function forceClosePopup() {
-        console.log('Force closing popup with multiple methods');
-        try {
-            // First, notify background script that we're closing so it can track this action
-            // This helps prevent the keyboard shortcut from immediately reopening
-            chrome.runtime.sendMessage({ 
-                action: 'forceClosePopup',
-                source: 'popup_shortcut'  // Flag that this was initiated from the popup
-            });
-            
-            // Method 1: Standard window.close()
-            window.close();
-            
-            // Method 2: Force document unload
-            document.body.innerHTML = '';
-            window.location.href = 'about:blank';
-            
-            // Method 4: Self-destruct via reload
-            setTimeout(() => {
-                if (window) {
-                    try {
-                        window.location.reload();
-                    } catch (e) {
-                        console.error('Failed final close attempt:', e);
-                    }
-                }
-            }, 50);
-        } catch (e) {
-            console.error('Error force closing popup:', e);
-        }
-    }
-
-    // Add a special handler just for Command+Shift+P to ensure we catch it
-    function handleCommandShiftP(event) {
-        if ((event.metaKey || event.ctrlKey) && event.shiftKey && 
-            (event.code === 'KeyP' || event.key === 'P' || event.key === 'p')) {
-            console.log('GLOBAL Command+Shift+P detected, preventing default and force closing popup...');
-            event.preventDefault();
-            event.stopPropagation();
-            forceClosePopup();
-            return true;
-        }
-        return false;
-    }
-
-    // Enhanced keyboard shortcut detection - using keydown, keypress, and keyup for redundancy
-    window.addEventListener('keydown', (event) => {
-        console.log('Keydown event detected in popup:', event.key, event.code, 'Meta/Ctrl:', event.metaKey || event.ctrlKey, 'Shift:', event.shiftKey);
-        handleCommandShiftP(event);
-    }, true); // Use capture phase to get events early
-    
-    // Add keyup as a backup in case keydown doesn't work
-    window.addEventListener('keyup', (event) => { 
-        console.log('Keyup event detected in popup:', event.key, event.code);
-        handleCommandShiftP(event);
-    }, true);
-    
-    // Add keypress as a backup in case the other events don't work
-    window.addEventListener('keypress', (event) => {
-        console.log('Keypress event detected in popup:', event.key, event.code);
-        handleCommandShiftP(event);
-    }, true);
-    
-    // Add document level listeners as well
-    document.addEventListener('keydown', (event) => {
-        console.log('Document keydown in popup:', event.key, event.code);
-        handleCommandShiftP(event);
-    }, true);
+    // Enhanced keyboard shortcut detection - using multiple event types for redundancy
+    window.addEventListener('keydown', handleCommandShiftP, true); // Use capture phase to get events early
+    window.addEventListener('keyup', handleCommandShiftP, true);
+    window.addEventListener('keypress', handleCommandShiftP, true);
+    document.addEventListener('keydown', handleCommandShiftP, true);
 
     // Listen for close messages from the background script
     chrome.runtime.onMessage.addListener((message) => {
         console.log('Message received in popup:', message);
         if (message.action === 'closePopup' || message.action === 'forceClosePopup') {
             console.log('Received close popup message, force closing popup window');
-            forceClosePopup();
+            import('./utils/popup/popup_handlers.js').then(module => {
+                module.forceClosePopup();
+            });
         }
         // Always return true to indicate async handling
         return true;
     });
 
-    // Check flow type (custom title vs settings)
-    chrome.storage.local.get('customTitleData', (result) => {
-        if (chrome.runtime.lastError) {
-            console.error("Error checking for custom title flow:", chrome.runtime.lastError);
-             settingsSection.style.display = 'block';
-             loadSettings();
-            // Attach settings listeners only if settings are shown
-            attachSettingsListeners();
-            return;
-        }
-
-        const customTitleData = result.customTitleData;
-        if (customTitleData && customTitleData.isCustomTitleFlow) {
-            // Setup for Custom Title Mode
-            console.log("Popup opened in custom title flow.", customTitleData);
-            settingsSection.style.display = 'none';
-            customTitleSection.style.display = 'block';
-            customTitleInput.value = customTitleData.originalTitle || '';
-            customTitleInput.focus();
-            customTitleInput.select();
-            attachCustomTitleListeners(customTitleData);
-        } else {
-            // Setup for Settings Mode
-            console.log("Popup opened in standard settings mode.");
-            customTitleSection.style.display = 'none';
-            settingsSection.style.display = 'block';
-            loadSettings();
-            attachSettingsListeners();
-        }
-    });
+    // Initialize popup based on mode
+    initializePopup(
+        settingsSection,
+        customTitleSection,
+        customTitleInput,
+        folderPathInput,
+        pastPathsDatalist,
+        statusDiv,
+        customTitleStatus,
+        saveButton,
+        saveCustomTitleButton
+    );
 });
 
 // --- Listener Attachment Functions ---

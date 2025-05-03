@@ -35,7 +35,7 @@
           },
           "description": "Save current paper to Google Drive with custom title."
         },
-        "open_popup": {
+        "maybe_open_popup": {
           "suggested_key": {
              "default": "Ctrl+Shift+P",
              "mac": "Command+Shift+P"
@@ -44,7 +44,8 @@
         }
     },
     "background": {
-        "service_worker": "background.js"
+        "service_worker": "background.js",
+        "type": "module"
     },
     "oauth2": {
         "client_id": "36293396270-ivqrqj7jtpt483ilg06uo1s65eism0h7.apps.googleusercontent.com",

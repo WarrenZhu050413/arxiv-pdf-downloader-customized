@@ -1,9 +1,9 @@
-// handlers.js
+import { fetchHtmlPageTitle, parseTitleAndIdentifier } from '../common/file_utils.js';
 
 // --- Helper Function for Usenix PDF Page ---
 // Input: URL object, regex match object
 // Returns: Promise resolving to [pdfUrl, title, identifier, type] or null
-async function handleUsenixPdf(url, match) {
+export async function handleUsenixPdf(url, match) {
     const conferencePart = match[1]; // e.g., "nsdi23"
     const authorPart = match[2]; // e.g., "liu-tianfeng"
     const filePdfUrl = url;
@@ -19,7 +19,7 @@ async function handleUsenixPdf(url, match) {
 // --- Helper Function for Usenix Presentation Page ---
 // Input: URL object, regex match object
 // Returns: Promise resolving to [pdfUrl, title, identifier, type] or null
-async function handleUsenixPresentation(url, match) {
+export async function handleUsenixPresentation(url, match) {
     const conferencePart = match[1]; // e.g., "nsdi23"
     const authorPart = match[2]; // e.g., "liu-tianfeng"
     const filePdfUrl = `https://www.usenix.org/system/files/${conferencePart}-${authorPart}.pdf`;
@@ -31,11 +31,10 @@ async function handleUsenixPresentation(url, match) {
     return [filePdfUrl, parsedResult.title, usenixIdentifier, 'Usenix'];
 }
 
-
 // --- Helper Function for arXiv Abstract Page ---
 // Input: URL object, regex match object
 // Returns: Promise resolving to [pdfUrl, title, identifier, type] or null
-async function handleArxivAbstract(url, match) {
+export async function handleArxivAbstract(url, match) {
     const paperId = match[1];
     const filePdfUrl = `https://arxiv.org/pdf/${paperId}.pdf`;
     console.log(`Fetching title from arXiv abstract page: ${url}`);
@@ -49,7 +48,7 @@ async function handleArxivAbstract(url, match) {
 // --- Helper Function for ACM Abstract Page ---
 // Input: URL object, regex match object
 // Returns: Promise resolving to [pdfUrl, title, identifier, type] or null
-async function handleAcmAbstract(url, match) {
+export async function handleAcmAbstract(url, match) {
     const doiPart = match[1];
     const filePdfUrl = `https://dl.acm.org/doi/pdf/${doiPart}`;
     console.log(`Fetching title from ACM abstract page: ${url}`);
@@ -62,7 +61,7 @@ async function handleAcmAbstract(url, match) {
 // --- Helper Function for arXiv PDF Page ---
 // Input: URL object, regex match object
 // Returns: Promise resolving to [pdfUrl, title, identifier, type] or null
-async function handleArxivPdf(url, match) {
+export async function handleArxivPdf(url, match) {
     const paperIdWithExt = match[1];
     const paperId = paperIdWithExt.replace(".pdf", "");
     const filePdfUrl = url;
@@ -78,7 +77,7 @@ async function handleArxivPdf(url, match) {
 // --- Helper Function for ACM PDF Page ---
 // Input: URL object, regex match object
 // Returns: Promise resolving to [pdfUrl, title, identifier, type] or null
-async function handleAcmPdf(url, match) {
+export async function handleAcmPdf(url, match) {
     const doiPart = match[1];
     const filePdfUrl = url;
     let rawTitle = null;
@@ -98,4 +97,41 @@ async function handleAcmPdf(url, match) {
     }
     console.log(`ACM PDF Handler: PDF URL=${filePdfUrl}, Title=${parsedResult.title}, Identifier=${doiPart}`);
     return [filePdfUrl, parsedResult.title, doiPart, 'DOI'];
-} 
+}
+
+// Configuration of site patterns and their handlers
+export const siteHandlers = [
+    { pattern: /https:\/\/arxiv.org\/abs\/(\S+)/, handler: handleArxivAbstract, name: 'arXiv Abstract' },
+    { pattern: /https:\/\/dl.acm.org\/doi\/(10\.\d{4,9}\/[-._;()\/:A-Z0-9]+)/i, handler: handleAcmAbstract, name: 'ACM Abstract' },
+    { pattern: /https:\/\/arxiv.org\/pdf\/(\S+)/, handler: handleArxivPdf, name: 'arXiv PDF' },
+    { pattern: /https:\/\/dl.acm.org\/doi\/pdf\/(10\.\d{4,9}\/[-._;()\/:A-Z0-9]+)/i, handler: handleAcmPdf, name: 'ACM PDF' },
+    // Updated Usenix patterns to allow hyphens in the author part
+    { pattern: /https:\/\/www.usenix.org\/system\/files\/([\w\d]+)-([\w\d-]+)\.pdf/i, handler: handleUsenixPdf, name: 'Usenix PDF' },
+    { pattern: /https:\/\/www.usenix.org\/conference\/([\w\d]+)\/presentation\/([\w\d-]+)/i, handler: handleUsenixPresentation, name: 'Usenix Presentation' }
+];
+
+// Determines the PDF URL, title, and identifier based on the tab's URL.
+// Returns [filePdfUrl, title, identifier, idType] or null
+export const getUrlAndName = async (tab) => {
+    const url = String(tab.url);
+    console.log("Processing URL:", url);
+
+    for (const site of siteHandlers) {
+        const match = url.match(site.pattern);
+        if (match) {
+            console.log(`Matched pattern for ${site.name}`);
+            try {
+                // Await the result from the specific handler
+                const result = await site.handler(url, match);
+                return result; // Return [filePdfUrl, title, identifier, idType]
+            } catch (error) {
+                 console.error(`Error in handler for ${site.name} (Pattern: ${site.pattern}):`, error);
+                 return null; // Return null on handler error
+            }
+        }
+    }
+
+    // If no pattern matched
+    console.log("Current page URL does not match any supported patterns.");
+    return null;
+}; 

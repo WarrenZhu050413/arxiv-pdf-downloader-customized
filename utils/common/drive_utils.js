@@ -1,147 +1,8 @@
-// utils.js
-
-// Fetches the HTML title from a given URL
-const fetchHtmlPageTitle = async (url) => {
-    try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-        const text = await response.text();
-        const titleMatch = text.match(/<title>(.*?)<\/title>/);
-        if (!titleMatch || titleMatch.length < 2) throw new Error('Title not found in page');
-
-        // Basic cleaning of title for filename safety
-        const rawTitle = titleMatch[1].replace(/<("[^"]*"|'[^\']*'|[^'">])*>/g, '');
-        const safeTitle = rawTitle.replace(/[\/?%*:|"<>]/g, '-'); // Replace invalid filename chars
-        return safeTitle;
-    } catch (error) {
-        console.error('Error fetching title from page:', url, error);
-        return null;
-    }
-};
-
-// Parses a raw title string to separate known identifiers (e.g., arXiv)
-function parseTitleAndIdentifier(rawTitleString) {
-    if (!rawTitleString) {
-        return { title: null, identifier: null };
-    }
-    console.log("Raw title input for parsing:", rawTitleString);
-
-    let title = rawTitleString;
-    let identifier = null;
-
-    const arxivIdPattern = /^\s*\[([^\]]+)\]\s*/; // Allow leading space before bracket
-    const arxivMatch = title.match(arxivIdPattern);
-    if (arxivMatch) {
-        identifier = arxivMatch[1]; // Capture the ID
-        title = title.substring(arxivMatch[0].length).trim(); // Remove ID from title
-        console.log(`Parsed arXiv identifier: ${identifier}`);
-    }
-
-    // Sanitize the remaining title part for filename use
-    const safeTitle = title.replace(/[\/?%*:|"<>]/g, '-').replace(/\s+/g, ' ').trim();
-
-    // Return null title if it became empty after removing ID and sanitizing
-    return {
-        title: safeTitle || null, // Return the cleaned title part
-        identifier: identifier // Return extracted identifier (null if none found)
-    };
-}
-
-// Constructs filename using title, identifier, and a fallback ID
-function constructFilename(title, identifier, fallbackId, idType = 'unknown') {
-    let saveFilename;
-    const safeFallbackId = fallbackId ? String(fallbackId).replace(/[\\/?%*:|"<>]/g, '_') : 'unknown';
-    const identifierToUse = identifier || safeFallbackId;
-    const safeIdentifierToAppend = String(identifierToUse).replace(/[\\/?%*:|"<>]/g, '_');
-    const safeTitle = title ? title.replace(/[\\/?%*:|"<>]/g, '-').replace(/\s+/g, ' ').trim() : null;
-
-    if (safeTitle) {
-        saveFilename = `${safeTitle} [${safeIdentifierToAppend}].pdf`;
-    } else {
-        console.warn(`Using fallback filename based on ${idType} ID: ${safeIdentifierToAppend}`);
-        saveFilename = `${safeIdentifierToAppend}.pdf`;
-    }
-    return saveFilename;
-}
-
-// Shows a Chrome notification
-const showNotification = (title, message, type) => {
-    chrome.notifications.create('', {
-        type: 'basic',
-        iconUrl: 'images/icon_128.png',
-        title: title,
-        message: message
-    }, (notificationId) => {
-        if (chrome.runtime.lastError) {
-            console.error(`Error showing notification: ${chrome.runtime.lastError.message}`);
-        } else {
-            console.log(`Notification ${type}: ${notificationId}`);
-        }
-    });
-};
-
-// Opens the extension popup
-async function openExtensionPopup() {
-    try {
-      // First check if there's an active window at all
-      let activeWindows = await chrome.windows.getAll({ windowTypes: ['normal'], populate: false });
-      if (!activeWindows || activeWindows.length === 0) {
-        console.log("No active Chrome windows found. Cannot open popup without a browser window.");
-        showNotification('INFO', 'Please open a browser window first', 'info');
-        return;
-      }
-
-      // Try to get the last focused window
-      try {
-        const currentWindow = await chrome.windows.getLastFocused();
-        
-        if (currentWindow && currentWindow.focused) {
-          // Only open popup if we have a focused window
-          await chrome.action.();
-          console.log("Popup open requested.");
-        } else {
-          // Try to focus a window first
-          if (activeWindows.length > 0) {
-            await chrome.windows.update(activeWindows[0].id, { focused: true });
-            // Wait a moment for the focus to take effect
-            setTimeout(async () => {
-              try {
-                await chrome.action.openPopup();
-                console.log("Popup open requested after focusing window.");
-              } catch (e) {
-                console.error("Failed to open popup after focusing window:", e);
-              }
-            }, 100);
-          } else {
-            console.error("No window available to focus.");
-            showNotification('INFO', 'Could not focus a browser window', 'info');
-          }
-        }
-      } catch (focusError) {
-        console.warn("Error getting focused window:", focusError);
-        
-        // Fallback: Try with any available window
-        if (activeWindows.length > 0) {
-          await chrome.windows.update(activeWindows[0].id, { focused: true });
-          setTimeout(async () => {
-            try {
-              await chrome.action.openPopup();
-              console.log("Popup open requested with fallback window.");
-            } catch (e) {
-              console.error("Failed to open popup with fallback window:", e);
-            }
-          }, 100);
-        }
-      }
-    } catch (error) {
-      console.error("Error opening popup:", error);
-      showNotification('FAILURE', 'Could not open extension popup', 'failure');
-    }
-}
+// drive_utils.js
+import { showNotification } from './notification_utils.js';
 
 // --- GoogleDriveUploader Class ---
-class GoogleDriveUploader {
+export class GoogleDriveUploader {
     constructor() {
         this.apiUrl = 'https://www.googleapis.com/drive/v3/files';
         this.uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
@@ -291,7 +152,7 @@ class GoogleDriveUploader {
 }
 
 // Generic upload function that uses the class and returns status
-async function uploadToDrive(fileInfo, folderPath, token = null) {
+export async function uploadToDrive(fileInfo, folderPath, token = null) {
     console.log(`Initiating upload for: ${fileInfo.name} to path: ${folderPath}`);
     try {
         const googleDriveUploader = new GoogleDriveUploader();
@@ -317,4 +178,4 @@ async function uploadToDrive(fileInfo, folderPath, token = null) {
         showNotification('FAILURE', errorMsg, 'failure');
         return { success: false, message: errorMsg }; // Return failure status
     }
-}
+} 
